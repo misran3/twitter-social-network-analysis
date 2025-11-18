@@ -36,6 +36,23 @@ class S3ResultsOutput(spark: SparkSession) extends ResultsOutput {
     println()
   }
 
+  def saveResultsToS3(results: DataFrame, s3OutputPath: String): Unit =
+    try {
+      println(s"Saving results to S3: $s3OutputPath")
+
+      results.write
+        .mode("overwrite")
+        .option("compression", "snappy") // Use Snappy compression for better performance
+        .parquet(s3OutputPath)
+
+      println(s"Successfully saved results to: $s3OutputPath")
+
+    } catch {
+      case e: Exception =>
+        println(s"Error saving results to S3: ${e.getMessage}")
+        throw e
+    }
+
   def saveResultsToS3SingleFile(results: DataFrame, s3OutputPath: String): Unit =
     try {
       println(s"Saving results to S3: $s3OutputPath")
@@ -54,6 +71,25 @@ class S3ResultsOutput(spark: SparkSession) extends ResultsOutput {
         println(s"Error saving results to S3: ${e.getMessage}")
         throw e
     }
+
+  def displayTopRankedUsers(topRankedDF: DataFrame): Unit = {
+    println("=" * 80)
+    println("TOP USERS BY PAGERANK SCORE")
+    println("=" * 80)
+    println(f"${"User ID"}%-15s ${"PageRank Score"}%-20s")
+    println("-" * 80)
+
+    val topUsers = topRankedDF.collect()
+    topUsers.foreach { row =>
+      val userId = row.getAs[Long]("userId")
+      val rank   = row.getAs[Double]("rank")
+      println(f"${userId}%-15d ${rank}%-20.15f")
+    }
+
+    println("=" * 80)
+    println(s"Displayed ${topUsers.length} top ranked users")
+    println()
+  }
 }
 
 /** Companion object for S3ResultsOutput with factory methods

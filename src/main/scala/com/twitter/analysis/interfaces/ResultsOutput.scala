@@ -21,6 +21,14 @@ trait ResultsOutput {
     */
   def displayTopUsers(topUsersDF: DataFrame): Unit
 
+  /** Persists analysis results to S3 bucket
+    * @param results
+    *   DataFrame containing results to save
+    * @param s3OutputPath
+    *   S3 path for saving results
+    */
+  def saveResultsToS3(results: DataFrame, s3OutputPath: String): Unit
+
   /** Persists analysis results to S3 bucket in structured format
     * @param results
     *   DataFrame containing results to save
@@ -28,4 +36,10 @@ trait ResultsOutput {
     *   S3 path for saving results
     */
   def saveResultsToS3SingleFile(results: DataFrame, s3OutputPath: String): Unit
+
+  /** Displays top users with their PageRank scores in formatted output
+    * @param topRankedDF
+    *   DataFrame containing top ranked users with userId and rank columns
+    */
+  def displayTopRankedUsers(topRankedDF: DataFrame): Unit
 }

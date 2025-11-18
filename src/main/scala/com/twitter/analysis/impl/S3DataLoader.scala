@@ -2,6 +2,9 @@ package com.twitter.analysis.impl
 
 import com.twitter.analysis.config.AWSConfig
 import com.twitter.analysis.interfaces.DataLoader
+import com.twitter.analysis.models.DataModels
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types.{DoubleType, LongType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 /** S3-enabled implementation of DataLoader for reading Twitter social graph data from Amazon S3
@@ -9,23 +12,11 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
   */
 class S3DataLoader(spark: SparkSession) extends DataLoader {
 
-  /** Loads edge list data from S3 bucket using secure AWS credentials Reads tab-separated files and
-    * converts them into a DataFrame with source and destination columns
-    *
-    * @param inputPath
-    *   The S3 path to the edge list file (e.g., s3a://bucket/path/edges.txt)
-    * @return
-    *   DataFrame containing source and destination user IDs
-    */
-  def loadEdgeList(inputPath: String): DataFrame = {
+  override def loadEdgeList(inputPath: String): DataFrame = {
     validatePath(inputPath)
 
     try {
-      // Configure S3 access before reading
-      configureS3Access()
-
-      // Apply S3 read optimizations and validate format
-      val optimizedDF = optimizeReading(spark, inputPath)
+      val optimizedDF = readDataOptimized(spark, inputPath, DataModels.edgeSchema)
       filterInvalidEdges(optimizedDF)
 
     } catch {
@@ -38,6 +29,29 @@ class S3DataLoader(spark: SparkSession) extends DataLoader {
         throw new RuntimeException(s"S3 object not found: $inputPath. Verify the path exists.", e)
       case e: Exception                                       =>
         throw new RuntimeException(s"Failed to load edge list from S3: $inputPath", e)
+    }
+  }
+
+  override def loadTopicsData(inputPath: String): DataFrame = {
+    validatePath(inputPath)
+
+    try {
+      val df = readData(spark, inputPath, DataModels.topicSchema)
+      filterInvalidTopics(df)
+
+    } catch {
+      case e: org.apache.hadoop.fs.s3a.AWSBadRequestException =>
+        throw new RuntimeException(
+          s"S3 access denied or bucket not found: $inputPath. Check IAM permissions.",
+          e
+        )
+      case e: java.io.FileNotFoundException                   =>
+        throw new RuntimeException(
+          s"S3 topics data not found: $inputPath. Verify the path exists.",
+          e
+        )
+      case e: Exception                                       =>
+        throw new RuntimeException(s"Failed to load topics data from S3: $inputPath", e)
     }
   }
 
@@ -62,19 +76,36 @@ class S3DataLoader(spark: SparkSession) extends DataLoader {
     hadoopConf.set("fs.s3a.connection.ssl.enabled", "true")
   }
 
-  /** Validates S3 path format and accessibility
-    * @param inputPath
-    *   The S3 path to validate
+  /** Validates that edge data contains exactly two user IDs per line
+    * @param df
+    *   The DataFrame to validate
+    * @return
+    *   Validated DataFrame with proper edge format
     */
-  protected def validatePath(inputPath: String): Unit =
-    if (
-      !inputPath.startsWith("s3://") && !inputPath
-        .startsWith("s3a://") && !inputPath.startsWith("s3n://")
-    ) {
-      throw new IllegalArgumentException(
-        s"Invalid S3 path format: $inputPath. Must start with s3://, s3a://, or s3n://"
-      )
-    }
+  private def filterInvalidEdges(df: DataFrame): DataFrame =
+    df.select(
+      col("source").cast(LongType).as("source"),
+      col("destination").cast(LongType).as("destination")
+    ).filter(col("source").isNotNull && col("destination").isNotNull)
+
+  /** Validates that topics data contains valid user ID and frequency values
+    * @param df
+    *   The DataFrame to validate
+    * @return
+    *   Validated DataFrame with proper topics format
+    */
+  private def filterInvalidTopics(df: DataFrame): DataFrame =
+    df.select(
+      col("userId").cast(LongType).as("userId"),
+      col("games").cast(DoubleType).as("games"),
+      col("movies").cast(DoubleType).as("movies"),
+      col("music").cast(DoubleType).as("music")
+    ).filter(
+      col("userId").isNotNull &&
+        col("games").isNotNull && col("games") >= 0.0 &&
+        col("movies").isNotNull && col("movies") >= 0.0 &&
+        col("music").isNotNull && col("music") >= 0.0
+    )
 }
 
 /** Companion object for S3DataLoader with factory methods
@@ -87,6 +118,9 @@ object S3DataLoader {
     * @return
     *   New S3DataLoader instance
     */
-  def apply(spark: SparkSession): S3DataLoader =
-    new S3DataLoader(spark)
+  def apply(spark: SparkSession): S3DataLoader = {
+    val loader = new S3DataLoader(spark)
+    loader.configureS3Access()
+    loader
+  }
 }

@@ -1,7 +1,6 @@
 package com.twitter.analysis.interfaces
 
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{LongType, StructField, StructType}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 /** Interface for loading and validating Twitter social graph data from cloud storage (S3 or Azure)
@@ -16,25 +15,55 @@ trait DataLoader {
     */
   def loadEdgeList(inputPath: String): DataFrame
 
+  /** Loads topics data containing user posting frequencies
+    * @param inputPath
+    *   The input path to the topics data file (tab-separated: userID\tgames\tmovies\tmusic)
+    * @return
+    *   DataFrame containing userId, games, movies, music frequencies
+    */
+  def loadTopicsData(inputPath: String): DataFrame
+
   /** Validate the input path format
     * @param inputPath
     *   The input path to the edge list file
     */
-  protected def validatePath(inputPath: String): Unit
+  protected def validatePath(inputPath: String): Unit =
+    if (
+      !inputPath.startsWith("s3://") && !inputPath
+        .startsWith("s3a://") && !inputPath.startsWith("s3n://")
+    ) {
+      throw new IllegalArgumentException(
+        s"Invalid S3 path format: $inputPath. Must start with s3://, s3a://, or s3n://"
+      )
+    }
 
-  /** Validates that edge data contains exactly two user IDs per line
-    * @param df
-    *   The DataFrame to validate
+  /** Reads data from the specified input path with given schema
+    * @param spark
+    *   The spark session
+    * @param inputPath
+    *   The input path to read data from
+    * @param schema
+    *   The schema to apply when reading the data
     * @return
-    *   Validated DataFrame with proper edge format
+    *   DataFrame containing the read data
     */
-  protected def filterInvalidEdges(df: DataFrame): DataFrame =
-    df.select(
-      col("source").cast(LongType).as("source"),
-      col("destination").cast(LongType).as("destination")
-    ).filter(col("source").isNotNull && col("destination").isNotNull)
+  protected def readData(
+      spark: SparkSession,
+      inputPath: String,
+      schema: StructType,
+      hasHeader: Boolean = false
+  ): DataFrame =
+    spark.read
+      .option("sep", "\t")
+      .option("header", hasHeader.toString)
+      .option("multiline", "false")
+      .option("escape", "")
+      .option("quote", "")
+      .option("inferSchema", "false")
+      .schema(schema)
+      .csv(inputPath)
 
-  /** Applies read optimizations for large file processing
+  /** Reads data with optimizations for large datasets
     * @param spark
     *   The spark session
     * @param inputPath
@@ -42,26 +71,13 @@ trait DataLoader {
     * @return
     *   Optimized DataFrame
     */
-  protected def optimizeReading(spark: SparkSession, inputPath: String): DataFrame = {
-    val edgeSchema: StructType = StructType(
-      Array(
-        StructField("source", LongType, nullable = false),
-        StructField("destination", LongType, nullable = false)
-      )
-    )
-
-    val df = spark.read
-      .option("sep", "\t")
-      .option("header", "false")
-      .option("multiline", "false")
-      .option("escape", "")
-      .option("quote", "")
-      .option("inferSchema", "false")
-      .schema(edgeSchema)
-      .csv(inputPath)
-      .toDF("source", "destination")
-
-    // Apply partitioning strategy for large datasets
+  protected def readDataOptimized(
+      spark: SparkSession,
+      inputPath: String,
+      schema: StructType,
+      hasHeader: Boolean = false
+  ): DataFrame = {
+    val df                = readData(spark, inputPath, schema, hasHeader)
     val optimalPartitions = calculateOptimalPartitions(spark, Some(inputPath))
     println(s"Repartitioning DataFrame to $optimalPartitions partitions for optimal performance.")
     df.repartition(optimalPartitions)
